@@ -1,0 +1,91 @@
+# kb-qa-agent · RAG 智能医疗导诊系统 —— Docker 编排
+# ------------------------------------------------------------
+# 默认即可开箱运行（sqlite + 本地向量 + 内存缓存）。
+# 取消注释下方 kb-qa-agent 的 VECTOR_STORE / REDIS_URL / CROSS_ENCODER_URL
+# 即可切换为 Chroma 向量库 + Redis 缓存 + Cross-Encoder 重排（联网服务）。
+#
+# 启动全部：   docker compose up -d --build
+# 仅看日志：   docker compose logs -f kb-qa-agent
+# 关停：       docker compose down
+
+services:
+  # ===== 1) 业务服务（React 前端已打包进镜像，由 Express 同源托管）=====
+  kb-qa-agent:
+    build: .
+    image: kb-qa-agent:latest
+    container_name: kb-qa-agent
+    ports:
+      - "3210:3210"
+    environment:
+      NODE_ENV: "production"
+      PORT: "3210"
+      # SQLite 数据库文件路径（已挂载到卷，重启不丢数据）
+      KB_DB_PATH: "/app/data/chat.db"
+
+      # —— LLM（二选一，页面「设置」中也能改）——
+      # 方式 A：OpenAI 兼容接口（以下为通义千问示例）
+      LLM_PROVIDER: "openai-compat"
+      OPENAI_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      # OPENAI_API_KEY: "sk-xxx"            # 也可在页面设置里填
+      OPENAI_MODEL: "qwen-plus"
+      # 方式 B：CodeBuddy（默认支持工具调用 / 权限控制 / RAG）
+      # LLM_PROVIDER: "codebuddy"
+      # CODEBUDDY_API_KEY: ""
+      # CODEBUDDY_AUTH_TOKEN: ""
+
+      # —— Embedding 向量化（留空则用本地 512 维哈希向量降级）——
+      EMBEDDING_API_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      # EMBEDDING_API_KEY: "sk-xxx"
+      EMBEDDING_MODEL: "text-embedding-v3"
+
+      # —— 向量存储：sqlite(默认) / chroma / pgvector ——
+      # 切到 chroma：确保下方 chroma 服务已启动
+      # VECTOR_STORE: "chroma"
+      # CHROMA_URL: "http://chroma:8000"
+      # CHROMA_COLLECTION: "kb_chunks"
+
+      # —— 跨编码器重排（可选，开启后显著提升召回精度）——
+      # 需自建 Cross-Encoder 推理服务，提供 POST /rerank 接口
+      # CROSS_ENCODER_URL: "http://cross-encoder:8001"
+
+      # —— 查询理解 / 缓存 ——
+      # QUERY_UNDERSTANDING_ENABLED: "1"     # 开启 NER + 查询扩展（需 LLM 已配置）
+      # CACHE_MODE: "redis"                  # 开启 Redis 缓存
+      # REDIS_URL: "redis://redis:6379"
+
+      # —— 检索 / 导诊阈值（可选）——
+      # RETRIEVE_TOP_K_PER_BRANCH: "10"
+      # TRIAGE_CONFIDENCE_THRESHOLD: "0.5"
+    volumes:
+      - kb-data:/app/data
+    depends_on:
+      - chroma
+      - redis
+    restart: unless-stopped
+
+  # ===== 2) Chroma 向量数据库（可选后端）=====
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: kb-chroma
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/chroma/.chroma
+    environment:
+      CHROMA_SERVER_CORS_ALLOW_ORIGINS: "*"
+    restart: unless-stopped
+
+  # ===== 3) Redis 缓存（可选后端）=====
+  redis:
+    image: redis:7-alpine
+    container_name: kb-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  kb-data:
+  chroma-data:
+  redis-data:
